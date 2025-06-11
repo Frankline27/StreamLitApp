@@ -17,12 +17,8 @@ mri_classifier, detailed_classifier = load_models()
 def preprocess_image(image: Image.Image) -> np.ndarray:
     image = image.resize((224, 224))  # Change size if required by model
     image_array = np.array(image) / 255.0
-    if image_array.ndim == 2:  # Grayscale
-        image_array = np.stack([image_array]*3, axis=-1)
-    elif image_array.shape[2] == 4:  # RGBA
-        image_array = image_array[..., :3]
     image_array = np.expand_dims(image_array, axis=0)
-    return image_array.astype(np.float32)
+    return image_array
 
 # ---- UI Layout ----
 st.title("MRI Image Classifier")
@@ -38,7 +34,7 @@ if uploaded_file is not None:
 
     with st.spinner("Checking if this is an MRI image..."):
         time.sleep(1)  # Simulate delay
-        mri_pred = mri_classifier.predict(preprocessed)[0][0]
+        mri_pred = mri_classifier.predict(preprocessed)[0]
         is_mri = mri_pred > 0.5
 
     if is_mri:
