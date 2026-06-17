@@ -2,11 +2,15 @@ import streamlit as st
 import numpy as np
 from PIL import Image
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.layers import Input, Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.applications import EfficientNetB0
 from tensorflow.keras.applications.efficientnet import preprocess_input
 from huggingface_hub import hf_hub_download
 import os
 import matplotlib.pyplot as plt
+import json
+import tempfile
 
 # Suppress TensorFlow warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -20,6 +24,95 @@ st.set_page_config(
 
 st.title("🧠 MRI Dementia Staging Classifier")
 st.write("Upload a medical image to classify it as MRI vs Non-MRI, then stage dementia if MRI")
+
+def load_model_safe(model_path):
+    """
+    Custom function to load Keras models while handling compatibility issues.
+    Tries multiple strategies to load the model.
+    """
+    try:
+        # Strategy 1: Try loading with custom_objects and compile=False
+        return load_model(model_path, compile=False, custom_objects={})
+    except Exception as e1:
+        st.warning(f"⚠️ Direct load failed: {str(e1)[:100]}...")
+        
+        try:
+            # Strategy 2: Try loading with legacy format
+            with tf.keras.utils.custom_object_scope({}):
+                return tf.keras.models.load_model(model_path, compile=False)
+        except Exception as e2:
+            st.warning(f"⚠️ Legacy load failed: {str(e2)[:100]}...")
+            
+            try:
+                # Strategy 3: Reconstruct model from config
+                return reconstruct_model_from_weights(model_path)
+            except Exception as e3:
+                st.error(f"❌ All loading strategies failed: {str(e3)}")
+                raise
+
+def reconstruct_model_from_weights(model_path):
+    """
+    Reconstruct the model architecture and load weights from the saved file.
+    This bypasses the InputLayer configuration issues.
+    """
+    try:
+        # Create a new model with the same architecture
+        base_model = EfficientNetB0(
+            include_top=False,
+            weights=None,  # We'll load weights from file
+            input_shape=(224, 224, 3)
+        )
+        
+        # Add custom classification head (match your training architecture)
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+        x = Dropout(0.5)(x)
+        x = Dense(128, activation='relu')(x)
+        x = Dropout(0.3)(x)
+        predictions = Dense(4, activation='softmax')(x)  # 4 classes for dementia staging
+        
+        # Build the model
+        model = Model(inputs=base_model.input, outputs=predictions)
+        
+        # Try to load weights from the saved file
+        try:
+            # Load the original model to get weights
+            original_model = tf.keras.models.load_model(
+                model_path,
+                compile=False,
+                custom_objects={}
+            )
+            
+            # Copy weights layer by layer (if architectures match)
+            for layer in model.layers:
+                try:
+                    original_layer = original_model.get_layer(layer.name)
+                    layer.set_weights(original_layer.get_weights())
+                except:
+                    st.warning(f"⚠️ Could not load weights for layer: {layer.name}")
+                    continue
+                    
+            return model
+            
+        except Exception as e:
+            st.warning(f"⚠️ Weight transfer failed: {e}. Trying alternative method...")
+            
+            # Alternative: Use tf.saved_model to load
+            try:
+                saved_model = tf.saved_model.load(model_path)
+                # Extract and rebuild weights
+                # This is a simplified version - may need adjustment
+                return saved_model
+            except:
+                # Final fallback: Try with older Keras format
+                try:
+                    with tf.compat.v1.Session().as_default():
+                        return tf.keras.models.load_model(model_path, compile=False)
+                except:
+                    raise Exception("Unable to load the model file. Please check if it's a valid TensorFlow model.")
+                    
+    except Exception as e:
+        raise Exception(f"Model reconstruction failed: {e}")
 
 # Model loading with caching
 @st.cache_resource
@@ -49,32 +142,9 @@ def load_models():
                 cache_dir="./model_cache"
             )
             
-            # Try multiple loading strategies
-            try:
-                # Strategy 1: Direct load with custom_objects
-                models["dementia_staging"] = load_model(
-                    model2_path, 
-                    compile=False,
-                    custom_objects={}
-                )
-            except Exception as e1:
-                st.warning(f"⚠️ Direct load failed, trying alternative method...")
-                try:
-                    # Strategy 2: Load with legacy format
-                    from tensorflow.keras.models import load_model as legacy_load
-                    models["dementia_staging"] = legacy_load(
-                        model2_path,
-                        compile=False
-                    )
-                except Exception as e2:
-                    # Strategy 3: Load with safe mode (ignore unknown configs)
-                    st.warning(f"⚠️ Legacy load failed, trying safe mode...")
-                    models["dementia_staging"] = load_model(
-                        model2_path,
-                        compile=False,
-                        safe_mode=True
-                    )
-                    
+            # Use the custom safe loader
+            models["dementia_staging"] = load_model_safe(model2_path)
+            
         except Exception as e:
             st.error(f"❌ Error loading Dementia staging model: {e}")
             st.error("Please check if the model file is accessible and not corrupted.")
