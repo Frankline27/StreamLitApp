@@ -61,7 +61,7 @@ if uploaded_file is not None:
         st.error(f"❌ Error opening image: {e}")
         st.stop()
     
-    # Automatic classification (button removed)
+    # Automatic classification
     with st.spinner("🔍 Analyzing image..."):
         try:
             # Preprocess for EfficientNetB0
@@ -80,10 +80,10 @@ if uploaded_file is not None:
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
             
-            # --- UPDATED: STANDARD PREDICTION LOGIC ---
-            # The new model works correctly - no inversion needed
+            # --- SWAPPED PREDICTION LOGIC ---
+            # Now assuming Class 0 = MRI, Class 1 = Non-MRI
             if predictions.shape[-1] == 1:
-                # Single neuron output - probability for class 1 (MRI)
+                # Single neuron output - now probability for MRI (Class 0)
                 probability_mri = float(predictions[0][0])
                 probability_non_mri = 1 - probability_mri
                 
@@ -95,9 +95,9 @@ if uploaded_file is not None:
                     predicted_class = "Non-MRI"
                     confidence = probability_non_mri
             else:
-                # For 2-class softmax, index 0 is Non-MRI, index 1 is MRI
-                probability_non_mri = float(predictions[0][0])
-                probability_mri = float(predictions[0][1])
+                # For 2-class softmax, index 0 is MRI, index 1 is Non-MRI
+                probability_mri = float(predictions[0][0])
+                probability_non_mri = float(predictions[0][1])
                 
                 if probability_mri > 0.5:
                     predicted_class = "MRI"
