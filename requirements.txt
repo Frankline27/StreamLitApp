@@ -3,3 +3,4 @@ tensorflow==2.15.0
 pillow==12.1.1
 numpy==1.26.4
 huggingface_hub>=0.20.0
+matplotlib>=3.7.0
