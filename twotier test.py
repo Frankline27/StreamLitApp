@@ -8,6 +8,9 @@ from huggingface_hub import hf_hub_download
 import os
 import matplotlib.pyplot as plt
 
+# Suppress TensorFlow warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 # Page configuration
 st.set_page_config(
     page_title="MRI Dementia Staging Classifier",
@@ -45,9 +48,36 @@ def load_models():
                 filename="My4wayADefficientnet.keras",
                 cache_dir="./model_cache"
             )
-            models["dementia_staging"] = load_model(model2_path, compile=False)
+            
+            # Try multiple loading strategies
+            try:
+                # Strategy 1: Direct load with custom_objects
+                models["dementia_staging"] = load_model(
+                    model2_path, 
+                    compile=False,
+                    custom_objects={}
+                )
+            except Exception as e1:
+                st.warning(f"⚠️ Direct load failed, trying alternative method...")
+                try:
+                    # Strategy 2: Load with legacy format
+                    from tensorflow.keras.models import load_model as legacy_load
+                    models["dementia_staging"] = legacy_load(
+                        model2_path,
+                        compile=False
+                    )
+                except Exception as e2:
+                    # Strategy 3: Load with safe mode (ignore unknown configs)
+                    st.warning(f"⚠️ Legacy load failed, trying safe mode...")
+                    models["dementia_staging"] = load_model(
+                        model2_path,
+                        compile=False,
+                        safe_mode=True
+                    )
+                    
         except Exception as e:
             st.error(f"❌ Error loading Dementia staging model: {e}")
+            st.error("Please check if the model file is accessible and not corrupted.")
             st.stop()
     
     return models
@@ -98,7 +128,7 @@ if uploaded_file is not None:
                 # === STAGE 1: MRI vs Non-MRI Classification ===
                 predictions_mri = mri_model.predict(img_array, verbose=0)
                 
-                # Interpret Stage 1 results (using your fixed logic)
+                # Interpret Stage 1 results
                 if predictions_mri.shape[-1] == 1:
                     probability_non_mri = float(predictions_mri[0][0])
                     probability_mri = 1 - probability_non_mri
@@ -131,22 +161,28 @@ if uploaded_file is not None:
                 ]
                 
                 if stage1_class == "MRI":
-                    # Use the dementia staging model
-                    predictions_dementia = dementia_model.predict(img_array, verbose=0)
-                    
-                    # Handle different output shapes
-                    if predictions_dementia.shape[-1] == 1:
-                        # Binary case (unlikely for 4-way, but safe)
-                        stage2_index = 0 if float(predictions_dementia[0][0]) > 0.5 else 1
-                        stage2_confidence = float(predictions_dementia[0][0])
-                        stage2_probs = np.array([1 - stage2_confidence, stage2_confidence, 0, 0])
-                    else:
-                        # Multi-class classification (4 classes)
-                        stage2_index = np.argmax(predictions_dementia[0])
-                        stage2_confidence = float(predictions_dementia[0][stage2_index])
-                        stage2_probs = predictions_dementia[0]
-                    
-                    stage2_class = dementia_classes[stage2_index]
+                    try:
+                        # Use the dementia staging model
+                        predictions_dementia = dementia_model.predict(img_array, verbose=0)
+                        
+                        # Handle different output shapes
+                        if len(predictions_dementia.shape) == 2:
+                            # Multi-class classification
+                            stage2_index = np.argmax(predictions_dementia[0])
+                            stage2_confidence = float(predictions_dementia[0][stage2_index])
+                            stage2_probs = predictions_dementia[0]
+                            stage2_class = dementia_classes[stage2_index]
+                        else:
+                            # Fallback for unexpected output
+                            st.warning("⚠️ Unexpected model output shape, using fallback interpretation")
+                            stage2_class = "Staging Unavailable"
+                            stage2_confidence = 0.0
+                            stage2_probs = np.array([0.25, 0.25, 0.25, 0.25])
+                    except Exception as e:
+                        st.warning(f"⚠️ Dementia staging failed: {e}")
+                        stage2_class = "Staging Error"
+                        stage2_confidence = 0.0
+                        stage2_probs = None
                 
                 # === DISPLAY RESULTS ===
                 st.subheader("📊 Prediction Results")
@@ -169,26 +205,29 @@ if uploaded_file is not None:
                     st.write("---")
                     st.write("### Stage 2: Dementia Staging")
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Dementia Stage", stage2_class)
-                    with col2:
-                        st.metric("Confidence", f"{stage2_confidence:.2%}")
-                    
-                    # Display all class probabilities for dementia staging
-                    if stage2_probs is not None:
-                        st.write("#### Class Probabilities")
+                    if stage2_class and stage2_class not in ["Staging Unavailable", "Staging Error"]:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Dementia Stage", stage2_class)
+                        with col2:
+                            st.metric("Confidence", f"{stage2_confidence:.2%}")
                         
-                        # Create a bar chart for probabilities
-                        fig, ax = plt.subplots()
-                        colors = ['#2ecc71' if i == stage2_index else '#e74c3c' for i in range(len(dementia_classes))]
-                        ax.barh(dementia_classes, stage2_probs, color=colors)
-                        ax.set_xlim(0, 1)
-                        ax.set_xlabel("Probability")
-                        ax.set_title("Dementia Stage Probabilities")
-                        st.pyplot(fig)
-                    
-                    st.success(f"🧠 The image is classified as an MRI scan with **{stage1_confidence:.2%}** confidence, and the dementia stage is **{stage2_class}**.")
+                        # Display all class probabilities for dementia staging
+                        if stage2_probs is not None and len(stage2_probs) >= 4:
+                            st.write("#### Class Probabilities")
+                            
+                            # Create a bar chart for probabilities
+                            fig, ax = plt.subplots()
+                            colors = ['#2ecc71' if i == stage2_index else '#e74c3c' for i in range(len(dementia_classes))]
+                            ax.barh(dementia_classes, stage2_probs[:4], color=colors)
+                            ax.set_xlim(0, 1)
+                            ax.set_xlabel("Probability")
+                            ax.set_title("Dementia Stage Probabilities")
+                            st.pyplot(fig)
+                        
+                        st.success(f"🧠 The image is classified as an MRI scan with **{stage1_confidence:.2%}** confidence, and the dementia stage is **{stage2_class}**.")
+                    else:
+                        st.warning(f"⚠️ Dementia staging could not be completed. The image is an MRI, but staging failed.")
                 else:
                     st.info(f"📷 The image is classified as a non-MRI scan with **{stage1_confidence:.2%}** confidence. No dementia staging performed.")
                     
