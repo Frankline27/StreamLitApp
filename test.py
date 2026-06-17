@@ -1,113 +1,136 @@
-"""
-Streamlit App — Demented vs Non-Demented MRI Classifier
-============================================================
-EfficientNetB0 binary classification, single run.
-
-Loads "efficientnetb0 deploy.keras" if present, otherwise falls
-back to "efficientnetb0 deploy.h5". Both are expected to sit in
-the same folder as this app.py file.
-
-Class mapping (confirmed at training time via flow_from_directory):
-    demented      -> 0
-    non demented  -> 1
-Sigmoid output close to 0 = demented, close to 1 = non demented.
-"""
-
 import streamlit as st
 import numpy as np
-from pathlib import Path
 from PIL import Image
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.applications.efficientnet import preprocess_input
+from huggingface_hub import hf_hub_download
+import os
 
-# ── Config ──────────────────────────────────────────────────────────────
+# Page configuration
+st.set_page_config(
+    page_title="MRI vs Non-MRI Classifier",
+    page_icon="🧠",
+    layout="centered"
+)
 
-APP_DIR = Path(__file__).parent
+st.title("🧠 MRI vs Non-MRI Image Classifier")
+st.write("Upload a medical image to classify it as MRI or Non-MRI")
 
-MODEL_NAME_KERAS = "efficientnetb0 deploy.keras"
-MODEL_NAME_H5    = "efficientnetb0 deploy.h5"
-
-INPUT_SIZE = (224, 224)  # (width, height) for PIL resize
-CLASS_NAMES = {0: "Demented", 1: "Non Demented"}
-THRESHOLD = 0.5
-
-st.set_page_config(page_title="Dementia MRI Classifier", layout="centered")
-
-# ── Model loading (cached so it only loads once per session) ────────────
-
+# Model loading with caching
 @st.cache_resource
-def load_classifier():
-    keras_path = APP_DIR / MODEL_NAME_KERAS
-    h5_path    = APP_DIR / MODEL_NAME_H5
+def load_model_from_hf():
+    """Download and load the model from Hugging Face"""
+    with st.spinner("📥 Downloading model from Hugging Face... This may take a moment."):
+        try:
+            # Download the model file
+            model_path = hf_hub_download(
+                repo_id="NdahTah/MRIVsNonMRI",
+                filename="efficientnetb0 mri deploy.h5",
+                cache_dir="./model_cache"  # Cache to avoid re-downloading
+            )
+            
+            # Load the model
+            model = load_model(model_path, compile=False)
+            return model
+        except Exception as e:
+            st.error(f"❌ Error loading model: {e}")
+            st.stop()
 
-    if keras_path.exists():
-        model = load_model(str(keras_path))
-        return model, str(keras_path)
-    elif h5_path.exists():
-        model = load_model(str(h5_path))
-        return model, str(h5_path)
-    else:
-        return None, None
-
-
-model, loaded_from = load_classifier()
-
-# ── UI ──────────────────────────────────────────────────────────────────
-
-st.title("Dementia MRI Classifier")
-st.write("Upload a brain MRI image to classify it as **Demented** or **Non Demented**.")
-
-if model is None:
-    st.error(
-        f"Could not find a model file. Expected either "
-        f"`{MODEL_NAME_KERAS}` or `{MODEL_NAME_H5}` in the same folder as app.py."
-    )
+# Load the model
+try:
+    model = load_model_from_hf()
+    st.success("✅ Model loaded successfully!")
+except Exception as e:
+    st.error(f"❌ Failed to load model: {e}")
     st.stop()
 
-st.caption(f"Model loaded from: `{Path(loaded_from).name}`")
-
+# Image upload section
 uploaded_file = st.file_uploader(
-    "Choose an MRI image",
-    type=["jpg", "jpeg", "png"],
+    "Choose an image...",
+    type=["jpg", "jpeg", "png", "dcm"],
+    help="Upload a medical image (JPG, JPEG, PNG, or DICOM)"
 )
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file)
+    # Display the uploaded image
+    try:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+    except Exception as e:
+        st.error(f"❌ Error opening image: {e}")
+        st.stop()
+    
+    # Prediction button
+    if st.button("🔍 Classify Image", type="primary"):
+        with st.spinner("🔍 Analyzing image..."):
+            try:
+                # Preprocess for EfficientNetB0
+                img = image.resize((224, 224))
+                img_array = np.array(img)
+                
+                # Ensure RGB format
+                if len(img_array.shape) == 2:
+                    img_array = np.stack([img_array]*3, axis=-1)
+                elif img_array.shape[-1] == 4:
+                    img_array = img_array[:, :, :3]
+                
+                img_array = np.expand_dims(img_array, axis=0)
+                img_array = preprocess_input(img_array)
+                
+                # Make prediction
+                predictions = model.predict(img_array, verbose=0)
+                
+                # Interpret results
+                # For binary classification with sigmoid
+                if predictions.shape[-1] == 1:
+                    probability_mri = float(predictions[0][0])
+                    predicted_class = "MRI" if probability_mri > 0.5 else "Non-MRI"
+                    confidence = probability_mri if probability_mri > 0.5 else 1 - probability_mri
+                else:
+                    # For 2-class softmax
+                    probability_mri = float(predictions[0][1]) if predictions.shape[-1] > 1 else float(predictions[0][0])
+                    predicted_class = "MRI" if probability_mri > 0.5 else "Non-MRI"
+                    confidence = probability_mri if probability_mri > 0.5 else 1 - probability_mri
+                
+                # Display results
+                st.subheader("📊 Prediction Results")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Prediction", predicted_class)
+                with col2:
+                    st.metric("Confidence", f"{confidence:.2%}")
+                
+                # Progress bar for visual representation
+                st.write("### Probability Distribution")
+                st.progress(float(probability_mri))
+                st.caption(f"MRI probability: {probability_mri:.2%} | Non-MRI probability: {1-probability_mri:.2%}")
+                
+                # Additional info
+                if predicted_class == "MRI":
+                    st.info("🧠 This image appears to be an MRI scan.")
+                else:
+                    st.info("📷 This image does not appear to be an MRI scan.")
+                    
+            except Exception as e:
+                st.error(f"❌ Error during prediction: {e}")
 
-    # Force RGB — handles grayscale source images, same as training pipeline
-    image_rgb = image.convert("RGB")
+# Instructions and info
+with st.expander("ℹ️ How to use this app"):
+    st.markdown("""
+    **Instructions:**
+    1. Click 'Browse files' to upload a medical image
+    2. Supported formats: JPG, JPEG, PNG, DICOM
+    3. Click 'Classify Image' to analyze
+    4. The model will classify it as MRI or Non-MRI
+    
+    **About:**
+    - This app uses an EfficientNetB0 model trained on medical images
+    - The model is hosted on Hugging Face and downloaded on-demand
+    - Results include prediction and confidence score
+    """)
 
-    st.image(image_rgb, caption="Uploaded image", use_container_width=True)
-
-    # Preprocess: resize to model input size, apply EfficientNet preprocessing
-    resized = image_rgb.resize(INPUT_SIZE)
-    img_array = np.array(resized).astype("float32")
-    img_array = np.expand_dims(img_array, axis=0)  # batch dimension
-    img_array = preprocess_input(img_array)
-
-    with st.spinner("Classifying..."):
-        prediction = model.predict(img_array, verbose=0)
-        prob = float(prediction[0][0])
-
-    predicted_class = 1 if prob > THRESHOLD else 0
-    label = CLASS_NAMES[predicted_class]
-
-    # Confidence: how far the sigmoid output is from the decision boundary,
-    # expressed as confidence in the predicted class
-    confidence = prob if predicted_class == 1 else (1 - prob)
-
-    st.subheader("Result")
-    if predicted_class == 0:
-        st.error(f"**{label}**")
-    else:
-        st.success(f"**{label}**")
-
-    st.write(f"Confidence: {confidence * 100:.2f}%")
-    st.write(f"Raw sigmoid output: {prob:.4f}")
-
-    with st.expander("How to read this"):
-        st.write(
-            "The model outputs a single probability between 0 and 1. "
-            "Values close to 0 indicate **Demented**, values close to 1 "
-            "indicate **Non Demented**. The decision threshold is 0.5."
-        )
+# Footer
+st.markdown("---")
+st.caption("Built with Streamlit • Model hosted on Hugging Face")
