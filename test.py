@@ -81,12 +81,13 @@ if uploaded_file is not None:
                 # Make prediction
                 predictions = model.predict(img_array, verbose=0)
                 
-                # --- UPDATED: STANDARD PREDICTION LOGIC ---
-                # The new model works correctly - no inversion needed
+                # --- FIXED PREDICTION LOGIC ---
+                # The model outputs probability for class 0 (which is Non-MRI in training)
+                # So we need to swap the interpretation
                 if predictions.shape[-1] == 1:
-                    # Single neuron output - probability for class 1 (MRI)
-                    probability_mri = float(predictions[0][0])
-                    probability_non_mri = 1 - probability_mri
+                    # Single neuron output - it's predicting Non-MRI probability
+                    probability_non_mri = float(predictions[0][0])
+                    probability_mri = 1 - probability_non_mri
                     
                     # Determine class based on MRI probability
                     if probability_mri > 0.5:
@@ -96,9 +97,9 @@ if uploaded_file is not None:
                         predicted_class = "Non-MRI"
                         confidence = probability_non_mri
                 else:
-                    # For 2-class softmax, index 0 is Non-MRI, index 1 is MRI
-                    probability_non_mri = float(predictions[0][0])
-                    probability_mri = float(predictions[0][1])
+                    # For 2-class softmax, assume index 0 is MRI, index 1 is Non-MRI
+                    probability_mri = float(predictions[0][0])
+                    probability_non_mri = float(predictions[0][1])
                     
                     if probability_mri > 0.5:
                         predicted_class = "MRI"
