@@ -23,14 +23,12 @@ def load_model_from_hf():
     """Download and load the model from Hugging Face"""
     with st.spinner("📥 Downloading model from Hugging Face... This may take a moment."):
         try:
-            # Download the model file
             model_path = hf_hub_download(
                 repo_id="NdahTah/MRIVsNonMRI",
                 filename="efficientnetb0 mri deploy.h5",
                 cache_dir="./model_cache"
             )
             
-            # Load the model
             model = load_model(model_path, compile=False)
             return model
         except Exception as e:
@@ -61,7 +59,7 @@ if uploaded_file is not None:
         st.error(f"❌ Error opening image: {e}")
         st.stop()
     
-    # --- AUTOMATIC CLASSIFICATION (no button needed) ---
+    # Automatic classification
     with st.spinner("🔍 Analyzing image..."):
         try:
             # Preprocess for EfficientNetB0
@@ -80,9 +78,27 @@ if uploaded_file is not None:
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
             
-            # --- STANDARD PREDICTION LOGIC ---
+            # --- DIAGNOSTIC: Show raw prediction ---
+            with st.expander("🔬 Debug Info (Raw Prediction)"):
+                st.write(f"Raw model output: {predictions[0]}")
+                st.write(f"Shape: {predictions.shape}")
+                if predictions.shape[-1] == 1:
+                    st.write(f"Single neuron output: {float(predictions[0][0]):.4f}")
+                    st.write("If this is > 0.5, model thinks it's Class 1")
+                    st.write("If this is < 0.5, model thinks it's Class 0")
+                else:
+                    st.write(f"Class 0 probability: {float(predictions[0][0]):.4f}")
+                    st.write(f"Class 1 probability: {float(predictions[0][1]):.4f}")
+            
+            # --- PREDICTION LOGIC ---
+            # Option A: If your training had Class 0 = Non-MRI, Class 1 = MRI
+            # Option B: If your training had Class 0 = MRI, Class 1 = Non-MRI
+            
+            # CHOOSE ONE BASED ON YOUR TRAINING:
+            
+            # OPTION 1: Class 0 = Non-MRI, Class 1 = MRI (most common)
             if predictions.shape[-1] == 1:
-                # Single neuron output - probability for MRI
+                # Single neuron - probability for Class 1 (MRI)
                 probability_mri = float(predictions[0][0])
                 probability_non_mri = 1 - probability_mri
                 
@@ -93,7 +109,7 @@ if uploaded_file is not None:
                     predicted_class = "Non-MRI"
                     confidence = probability_non_mri
             else:
-                # For 2-class softmax, index 0 is Non-MRI, index 1 is MRI
+                # Two neurons - index 0 = Non-MRI, index 1 = MRI
                 probability_non_mri = float(predictions[0][0])
                 probability_mri = float(predictions[0][1])
                 
@@ -103,6 +119,31 @@ if uploaded_file is not None:
                 else:
                     predicted_class = "Non-MRI"
                     confidence = probability_non_mri
+            
+            # --- OPTION 2: If your training had Class 0 = MRI, Class 1 = Non-MRI
+            # Uncomment this block and comment OPTION 1 if needed:
+            """
+            if predictions.shape[-1] == 1:
+                probability_non_mri = float(predictions[0][0])  # Actually MRI probability
+                probability_mri = 1 - probability_non_mri
+                
+                if probability_mri > 0.5:
+                    predicted_class = "MRI"
+                    confidence = probability_mri
+                else:
+                    predicted_class = "Non-MRI"
+                    confidence = probability_non_mri
+            else:
+                probability_mri = float(predictions[0][0])  # Index 0 = MRI
+                probability_non_mri = float(predictions[0][1])  # Index 1 = Non-MRI
+                
+                if probability_mri > 0.5:
+                    predicted_class = "MRI"
+                    confidence = probability_mri
+                else:
+                    predicted_class = "Non-MRI"
+                    confidence = probability_non_mri
+            """
             
             # Display results
             st.subheader("📊 Prediction Results")
@@ -133,13 +174,14 @@ with st.expander("ℹ️ How to use this app"):
     **Instructions:**
     1. Click 'Browse files' to upload a medical image
     2. Supported formats: JPG, JPEG, PNG, DICOM
-    3. **Classification happens automatically!** No button needed
-    4. Results appear instantly after upload
+    3. Classification happens automatically!
+    4. Check the Debug Info expander to see raw predictions
     
-    **About:**
-    - This app uses an EfficientNetB0 model trained on medical images
-    - The model is hosted on Hugging Face and downloaded on-demand
-    - Results include prediction and confidence score
+    **Troubleshooting:**
+    - If predictions are inverted, check the Debug Info
+    - See which class has higher probability
+    - The app uses Option 1 (Class 0 = Non-MRI, Class 1 = MRI)
+    - If your training used different class ordering, switch to Option 2
     """)
 
 # Footer
